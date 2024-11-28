@@ -10,10 +10,12 @@ from sptrans.quantization import bquantization
 
 from sptrans.deq_sddmm import bsddmm_8b
 from sptrans.deq_sddmm import bsddmm_4b
+from sptrans.deq_sddmm import bsddmm_16b
 from sptrans.deq_spmm import bspmm_8b
 from sptrans.deq_spmm import bspmm_16b8b
 from sptrans.deq_spmm import bspmm_4b
 from sptrans.deq_spmm import bspmm_8b4b
+from sptrans.deq_spmm import bspmm_16b
 from sptrans.q_softmax import q_bcsr_softmax
 
 
@@ -196,7 +198,9 @@ def sp_multi_head_attention_forward(
             attn_output_weights = bsddmm_8b(row_indices, row_offsets, column_indices, q, k, vec_length, rhs_pre, scale_qkv*scale_qkv)
         if rhs_pre == 4:
             attn_output_weights = bsddmm_4b(row_indices, row_offsets, column_indices, q, k, vec_length, rhs_pre, scale_qkv*scale_qkv)
-    
+        if rhs_pre == 16:
+            attn_output_weights = bsddmm_16b(row_indices, row_offsets, column_indices, q, k, vec_length, rhs_pre, scale_qkv*scale_qkv)
+
     with nvtx.annotate("sp Softmax"):
         attn_output_weights = q_bcsr_softmax(row_indices, row_offsets, attn_output_weights, scaling, scale_sfmx, vec_length, batch_size, lhs_pre)
     
@@ -210,6 +214,8 @@ def sp_multi_head_attention_forward(
             attn_output = bspmm_8b(row_indices, row_offsets, column_indices, attn_output_weights, v, vec_length, lhs_pre, rhs_pre, scale_qkv*scale_sfmx)
         if lhs_pre == 16 and rhs_pre == 8:
             attn_output = bspmm_16b8b(row_indices, row_offsets, column_indices, attn_output_weights, v, vec_length, lhs_pre, rhs_pre, scale_qkv*scale_sfmx)
+        if lhs_pre == 16 and rhs_pre == 16:
+            attn_output = bspmm_16b(row_indices, row_offsets, column_indices, attn_output_weights, v, vec_length, lhs_pre, rhs_pre, scale_qkv*scale_sfmx)
         if lhs_pre == 8 and rhs_pre == 4:
             attn_output = bspmm_8b4b(row_indices, row_offsets, column_indices, attn_output_weights, v, vec_length, lhs_pre, rhs_pre, scale_qkv*scale_sfmx)
         if lhs_pre == 4 and rhs_pre == 4:

@@ -197,6 +197,99 @@ __device__ void wmmaSpmm_kernel_8b_(
     output_tile_storer.Store();
 }
 
+//16-bit Tile_N = 64 with 2 warps
+template <typename LoadType, typename IndexType, typename VecType, int Tile_K, 
+          int Tile_N, int Warps, int VecLength>
+__device__ void wmmaSpmm_kernel_16b_(
+    int m_vec, int dimN, int dimK, float scale,
+    const int* __restrict__ row_indices, 
+    const int* __restrict__ row_offsets,
+    const int* __restrict__ column_indices,
+    const VecType* __restrict__ values,
+    const int* __restrict__ rhs_matrix,
+    half* __restrict__ output_matrix)
+{
+    // For the wmma based implementation, we have Tile_M = 1
+    int m_index_vec = blockIdx.x;
+    int dimN_index = blockIdx.y * Tile_N;
+    const int lane_id = threadIdx.x;
+    // Threads that work on different m-dim indices are independent
+    // If we're out of bounds in the m-dimension we can just return
+    if (m_index_vec >= m_vec) return;
+    m_index_vec = __ldg(row_indices + m_index_vec);
+
+    // Load the row offset and calculate the number of nonzeros in the row
+    int row_offset_vec = __ldg(row_offsets + m_index_vec*2);
+    int nonzeros = __ldg(row_offsets + m_index_vec*2 + 1) - row_offset_vec;
+
+    // Shared memory tiles for the lhs values and indices
+    __shared__ int values_tile_array[Tile_K*VecLength];
+    __shared__ int column_indices_tile_array[Tile_K*2];
+
+    // One int32 has two 16-bit integers
+    // Padding to avoid bank conflict
+    __shared__ int dense_tile_array[Tile_N*Tile_K/2 + 8*3];
+
+    // Pointers to the shared memory tiles
+    int* values_tile = values_tile_array;
+    int* column_indices_tile = column_indices_tile_array;
+    int* dense_tile = dense_tile_array;
+
+    // Initialize the pointers to the sparse lhs matrix
+    // One int32 has two 16-bit integers
+    wmmaSparseTile_16b<LoadType, VecType, Tile_K * VecLength / 2, Tile_K> sparse_tile_loader(
+        row_offset_vec, threadIdx.x % 32, threadIdx.x / 32, values, column_indices,
+        values_tile, column_indices_tile
+    );
+
+    __align__(16) int rhs_prefetch[4] = {};
+    // Initialize the pointers to the dense rhs matrix
+    wmmaDenseTile_16b<LoadType, Tile_K, Tile_N> dense_tile_loader(
+        dimN/2, dimN_index/2, lane_id, rhs_matrix, column_indices_tile, dense_tile, rhs_prefetch 
+    );
+
+    // Accumulator registers for the output values.
+    // Tile_N / warps / four threads in x-dim of output matrix
+    __align__(16) int output_fragment[Tile_N / Warps / 4] = {};
+    wmmaComputeUtils_16b<Tile_K * VecLength / 2> computer(values_tile, dense_tile, output_fragment, lane_id);
+
+    int steps = nonzeros / Tile_K;
+    int residue = nonzeros % Tile_K;
+
+    if(steps > 0){
+        sparse_tile_loader.Load(0);
+        __syncthreads();
+        dense_tile_loader.Prefetch(0);
+
+        int i = 1;
+        #pragma unroll
+        for(; i < steps; i++){
+            dense_tile_loader.LoadRowfromRegister(i-1);
+            sparse_tile_loader.Load(i);
+            __syncthreads();
+            dense_tile_loader.Prefetch(i);
+            computer.TileMAC(i-1);
+            __syncthreads();
+        }
+
+        dense_tile_loader.LoadRowfromRegister(i-1);
+        __syncthreads();
+        computer.TileMAC(i-1);
+    }
+   
+    if(residue > 0){
+        sparse_tile_loader.Residue();
+        __syncthreads();
+        dense_tile_loader.ResidueLoad(residue);
+        __syncthreads();
+        computer.TileMACResidue();
+    } 
+
+    wmmaOutputTile_16b output_tile_storer(lane_id, VecLength, m_index_vec, dimN_index, dimN, output_fragment, output_matrix, scale);
+    output_tile_storer.Store();
+}
+
+
 //16-bit 8-bit Tile_N = 64 with 2 warps
 template <typename LoadType, typename IndexType, typename VecType, int Tile_K, 
           int Tile_N, int Warps, int VecLength>
@@ -669,6 +762,56 @@ __global__ void batched_wmmaSpmm_kernel_8b(
     output_matrix);
 }
 
+template <typename LoadType, typename IndexType, typename VecType, int Tile_K, 
+          int Tile_N, int Warps, int VecLength>
+__global__ void wmmaSpmm_kernel_16b(
+    int m_vec, int dimN, int dimK, float scale,
+    const int* __restrict__ row_indices, 
+    const int* __restrict__ row_offsets,
+    const int* __restrict__ column_indices,
+    const VecType* __restrict__ values,
+    const int* __restrict__ rhs_matrix,
+    half* __restrict__ output_matrix)
+{
+    wmmaSpmm_kernel_16b_<LoadType, IndexType, VecType, Tile_K, Tile_N, Warps, VecLength>(
+    m_vec, dimN, dimK, scale,
+    row_indices, 
+    row_offsets,
+    column_indices,
+    values,
+    rhs_matrix,
+    output_matrix);
+}
+
+template <typename LoadType, typename IndexType, typename VecType, int Tile_K, 
+          int Tile_N, int Warps, int VecLength>
+__global__ void batched_wmmaSpmm_kernel_16b(
+    int m_vec, int dimN, int dimK, float scale,
+    const int* __restrict__ row_indices, 
+    const int* __restrict__ row_offsets,
+    const int* __restrict__ column_indices,
+    const VecType* __restrict__ values_b,
+    int values_stride,
+    const int* __restrict__ rhs_matrix_b,
+    int rhs_stride,
+    half* __restrict__ output_matrix_b,
+    int output_stride)
+{
+    int entry_idx = blockIdx.z;
+    const VecType* values = values_b + entry_idx * values_stride;
+    const int* rhs_matrix = rhs_matrix_b + entry_idx * rhs_stride;
+    half* output_matrix = output_matrix_b + entry_idx * output_stride;
+
+    wmmaSpmm_kernel_16b_<LoadType, IndexType, VecType, Tile_K, Tile_N, Warps, VecLength>(
+    m_vec, dimN, dimK, scale,
+    row_indices, 
+    row_offsets,
+    column_indices,
+    values,
+    rhs_matrix,
+    output_matrix);
+}
+
 
 //16-bit 8-bit Tile_N = 64 with 2 waprs
 template <typename LoadType, typename IndexType, typename VecType, int Tile_K, 
@@ -1003,6 +1146,28 @@ cudaError_t batched_wmmaSpmm_8b_template(
     return cudaGetLastError();
 }
 
+template <typename IndexType, typename VecType, int Tile_M, int Tile_K, int Tile_N, int WarpWidth, int Warps, int VecLength>
+cudaError_t batched_wmmaSpmm_16b_template(
+    int m_vec, int vec_length, int n, int k, int batch_size, float scale,
+    const int* __restrict__ row_indices, 
+    const int* __restrict__ row_offsets,
+    const int* __restrict__ column_indices,
+    const VecType* __restrict__ values_b,
+    int values_stride,
+    const int* __restrict__ rhs_matrix_b,
+    int rhs_stride,
+    half* __restrict__ output_matrix_b,
+    int output_stride)
+{
+    dim3 grid_dim(ceil(static_cast<float>(m_vec) / Tile_M), ceil(static_cast<float>(n) / Tile_N), batch_size);
+    dim3 block_dim(WarpWidth * Warps, Tile_M, 1);
+
+    batched_wmmaSpmm_kernel_16b<int, int, VecType, Tile_K, Tile_N, Warps, VecLength><<<grid_dim, block_dim>>>(
+        m_vec, n, k, scale, row_indices, row_offsets, column_indices, values_b, values_stride, rhs_matrix_b, rhs_stride, output_matrix_b, output_stride);
+    return cudaGetLastError();
+}
+
+
 //8-bit 4-bit Tile_N = 64 with 2 warps
 template <typename IndexType, typename VecType, int Tile_M, int Tile_K, int Tile_N, int WarpWidth, int Warps, int VecLength>
 cudaError_t batched_wmmaSpmm_8b4b_template(
@@ -1097,32 +1262,32 @@ torch::Tensor batched_deq_spmm_mma_16b8b(
     switch(vec_length){
         case 2:
             batched_wmmaSpmm_16b8b_template<int, int, 1, 16, 64, 32, 2, 2>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<int *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<int *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 4:
             batched_wmmaSpmm_16b8b_template<int, long long, 1, 16, 64, 32, 2, 4>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<long long *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<long long *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 8:
             batched_wmmaSpmm_16b8b_template<int, long long, 1, 16, 64, 32, 2, 8>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<long long *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<long long *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         default:
@@ -1173,32 +1338,32 @@ torch::Tensor batched_deq_spmm_mma_4b(
     switch(vec_length){
         case 2:
             batched_wmmaSpmm_4b_template<int, char, 1, 32, 64, 32, 2, 2>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<char *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<char *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 4:
             batched_wmmaSpmm_4b_template<int, short, 1, 32, 64, 32, 2, 4>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<short *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<short *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 8:
             batched_wmmaSpmm_4b_template<int, int, 1, 32, 64, 32, 2, 8>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<int *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<int *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         default:
@@ -1250,32 +1415,32 @@ torch::Tensor batched_deq_spmm_mma_8b4b(
     switch(vec_length){
         case 2:
             batched_wmmaSpmm_8b4b_template<int, short, 1, 32, 64, 32, 2, 2>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<short *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<short *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 4:
             batched_wmmaSpmm_8b4b_template<int, int, 1, 32, 64, 32, 2, 4>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<int *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<int *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 8:
             batched_wmmaSpmm_8b4b_template<int, long long, 1, 32, 64, 32, 2, 8>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<long long *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<long long *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         default:
@@ -1325,32 +1490,32 @@ torch::Tensor batched_deq_spmm_mma_8b(
     switch(vec_length){
         case 2:
             batched_wmmaSpmm_8b_template<int, short, 1, 16, 64, 32, 2, 2>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<short *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<short *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 4:
             batched_wmmaSpmm_8b_template<int, int, 1, 16, 64, 32, 2, 4>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<int *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<int *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         case 8:
             batched_wmmaSpmm_8b_template<int, long long, 1, 16, 64, 32, 2, 8>(m_vec, vec_length, n, k, batch_size, scale,
-                row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(), 
-                reinterpret_cast<long long *>(values.data<int>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<long long *>(values.data_ptr<int>()),
                 values_stride,
-                reinterpret_cast<int *>(rhs_matrix.data<int>()),
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
                 rhs_stride, 
-                reinterpret_cast<half *>(output_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
 	        output_stride);
             break;
         default:
@@ -1358,4 +1523,79 @@ torch::Tensor batched_deq_spmm_mma_8b(
     }
     return output_matrix;
 
+}
+
+torch::Tensor batched_deq_spmm_mma_16b(
+    torch::Tensor row_indices,
+    torch::Tensor row_offsets,
+    torch::Tensor column_indices,
+    torch::Tensor values,
+    torch::Tensor rhs_matrix,
+    int vec_length,
+    int bits_lhs,
+    int bits_rhs,
+    float scale)
+{
+    //int lhs_num_items_per_int32 = 32 / bits_lhs;
+    int rhs_num_items_per_int32 = 32 / bits_rhs;
+
+    int m_vec = row_offsets.size(-1)/2;
+    int m = m_vec * vec_length;
+
+    int n_int32 = rhs_matrix.size(-1);
+
+    int n = n_int32 * rhs_num_items_per_int32;
+
+    int k = rhs_matrix.size(-2);
+
+    //int batch_size = rhs_matrix.numel() / (n * k);
+    int batch_size = rhs_matrix.size(-3);
+
+    int nnz = column_indices.numel();
+
+
+    int values_stride = nnz; //stride in vector format
+    int rhs_stride = k * n_int32;
+    int output_stride = m * n;
+
+    auto options = torch::TensorOptions().dtype(torch::kFloat16).device(rhs_matrix.device());
+
+    auto output_matrix = torch::empty({batch_size, m, n}, options);
+
+
+    switch(vec_length){
+        case 2:
+            batched_wmmaSpmm_16b_template<int, short, 1, 16, 64, 32, 2, 2>(m_vec, vec_length, n, k, batch_size, scale,
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<short *>(values.data_ptr<int>()),
+                values_stride,
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
+                rhs_stride, 
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
+	        output_stride);
+            break;
+        case 4:
+            batched_wmmaSpmm_16b_template<int, int, 1, 16, 64, 32, 2, 4>(m_vec, vec_length, n, k, batch_size, scale,
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<int *>(values.data_ptr<int>()),
+                values_stride,
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
+                rhs_stride, 
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
+	        output_stride);
+            break;
+        case 8:
+            batched_wmmaSpmm_16b_template<int, long long, 1, 16, 64, 32, 2, 8>(m_vec, vec_length, n, k, batch_size, scale,
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(), 
+                reinterpret_cast<long long *>(values.data_ptr<int>()),
+                values_stride,
+                reinterpret_cast<int *>(rhs_matrix.data_ptr<int>()),
+                rhs_stride, 
+                reinterpret_cast<half *>(output_matrix.data_ptr<torch::Half>()),
+	        output_stride);
+            break;
+        default:
+            printf("Unsupported Vector Length!\n");
+    }
+    return output_matrix;
 }

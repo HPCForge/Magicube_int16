@@ -1188,34 +1188,34 @@ torch::Tensor sddmm_cuda(
     switch(vec_length){
         case 8:
             mmaSddmmKernel8reg<float4, half, float, false, 8><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(output_vals.data<torch::Half>())
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>())
             );
             break;
         case 4:
             mmaSddmmKernel4reg<float4, half, float2, false, 4><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(output_vals.data<torch::Half>())
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>())
             );
             break;
         case 2:
             mmaSddmmKernel2reg<float4, half, float, false, 2><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(output_vals.data<torch::Half>())
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>())
             );
             break;
         case 1:
             cudaSddmmKernel<float, half, half, false, 1, 64><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()), 
-                reinterpret_cast<half *>(output_vals.data<torch::Half>())
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()), 
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>())
             );
             break;
     }
@@ -1260,45 +1260,45 @@ torch::Tensor batched_sddmm_cuda(
     switch(vec_length){
         case 8:
             batchedMmaSddmmKernel8reg<float4, half, float, false, 8><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()),
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()),
                 lhs_stride,
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()), 
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()), 
                 rhs_stride,
-                reinterpret_cast<half *>(output_vals.data<torch::Half>()),
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>()),
                 output_stride
             );
             break;
         case 4:
             batchedMmaSddmmKernel4reg<float4, half, float2, false, 4><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()),
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()),
                 lhs_stride, 
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()),
                 rhs_stride,
-                reinterpret_cast<half *>(output_vals.data<torch::Half>()),
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>()),
                 output_stride
             );
             break;
         case 2:
             batchedMmaSddmmKernel2reg<float4, half, float, false, 2><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()),
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()),
                 lhs_stride, 
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()),
                 rhs_stride,
-                reinterpret_cast<half *>(output_vals.data<torch::Half>()),
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>()),
                 output_stride
             );
             break;
         case 1:
             batchedCudaSddmmKernel<float, half, half, false, 1, 64><<<grid, block>>>(
-                m_vec, k, n, row_indices.data<int>(), row_offsets.data<int>(), column_indices.data<int>(),
-                reinterpret_cast<half *>(lhs_matrix.data<torch::Half>()),
+                m_vec, k, n, row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(), column_indices.data_ptr<int>(),
+                reinterpret_cast<half *>(lhs_matrix.data_ptr<torch::Half>()),
                 lhs_stride,
-                reinterpret_cast<half *>(rhs_matrix.data<torch::Half>()),
+                reinterpret_cast<half *>(rhs_matrix.data_ptr<torch::Half>()),
                 rhs_stride,
-                reinterpret_cast<half *>(output_vals.data<torch::Half>()),
+                reinterpret_cast<half *>(output_vals.data_ptr<torch::Half>()),
                 output_stride
             );
             break;

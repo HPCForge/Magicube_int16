@@ -217,26 +217,26 @@ torch::Tensor csr_softmax_cuda(
     switch(vec_length){
         case 8:
             csrSoftmaxKernel<8, float4, 128><<<grid, block>>>(
-                row_indices.data<int>(), row_offsets.data<int>(),
-                reinterpret_cast<half *>(values.data<torch::Half>()),
-                reinterpret_cast<half *>(attn.data<torch::Half>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(),
+                reinterpret_cast<half *>(values.data_ptr<torch::Half>()),
+                reinterpret_cast<half *>(attn.data_ptr<torch::Half>()),
                 scaler
             );
             break;
         case 4:
             csrSoftmaxKernel<4, float2, 128><<<grid, block>>>(
-               row_indices.data<int>(), row_offsets.data<int>(),
-               reinterpret_cast<half *>(values.data<torch::Half>()),
-               reinterpret_cast<half *>(attn.data<torch::Half>()),
+               row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(),
+               reinterpret_cast<half *>(values.data_ptr<torch::Half>()),
+               reinterpret_cast<half *>(attn.data_ptr<torch::Half>()),
                scaler
            );
            break; 
         
         case 2:
             csrSoftmaxKernel<2, float, 128><<<grid, block>>>(
-               row_indices.data<int>(), row_offsets.data<int>(),
-               reinterpret_cast<half *>(values.data<torch::Half>()),
-               reinterpret_cast<half *>(attn.data<torch::Half>()),
+               row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(),
+               reinterpret_cast<half *>(values.data_ptr<torch::Half>()),
+               reinterpret_cast<half *>(attn.data_ptr<torch::Half>()),
                scaler
            );
            break;
@@ -268,19 +268,19 @@ torch::Tensor batched_csr_softmax_cuda(
     switch(vec_length){
         case 8:
             batchedCsrSoftmaxKernel<8, float4, 128><<<grid, block>>>(
-                row_indices.data<int>(), row_offsets.data<int>(),
-                reinterpret_cast<half *>(values.data<torch::Half>()),
+                row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(),
+                reinterpret_cast<half *>(values.data_ptr<torch::Half>()),
                 stride,
-                reinterpret_cast<half *>(attn.data<torch::Half>()),
+                reinterpret_cast<half *>(attn.data_ptr<torch::Half>()),
                 stride, scaler
             );
             break;
         case 4:
             batchedCsrSoftmaxKernel<4, float2, 128><<<grid, block>>>(
-               row_indices.data<int>(), row_offsets.data<int>(),
-               reinterpret_cast<half *>(values.data<torch::Half>()),
+               row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(),
+               reinterpret_cast<half *>(values.data_ptr<torch::Half>()),
                stride,
-               reinterpret_cast<half *>(attn.data<torch::Half>()),
+               reinterpret_cast<half *>(attn.data_ptr<torch::Half>()),
                stride,
                scaler
            );
@@ -288,10 +288,10 @@ torch::Tensor batched_csr_softmax_cuda(
         
         case 2:
             batchedCsrSoftmaxKernel<2, float, 128><<<grid, block>>>(
-               row_indices.data<int>(), row_offsets.data<int>(),
-               reinterpret_cast<half *>(values.data<torch::Half>()),
+               row_indices.data_ptr<int>(), row_offsets.data_ptr<int>(),
+               reinterpret_cast<half *>(values.data_ptr<torch::Half>()),
                stride,
-               reinterpret_cast<half *>(attn.data<torch::Half>()),
+               reinterpret_cast<half *>(attn.data_ptr<torch::Half>()),
                stride,
                scaler
            );

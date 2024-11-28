@@ -153,15 +153,15 @@ torch::Tensor quantization_cuda(
         case 8:
             quantizationKernel_8b<8><<<grid_dim, block_dim>>>(
                 m, n, scale,
-                reinterpret_cast<half *>(input_matrix.data<torch::Half>()),
-                reinterpret_cast<int *>(output_matrix.data<int>())
+                reinterpret_cast<half *>(input_matrix.data_ptr<torch::Half>()),
+                reinterpret_cast<int *>(output_matrix.data_ptr<int>())
             );
             break;
         case 4:
             quantizationKernel_4b<4><<<grid_dim, block_dim>>>(
                 m, n, scale,
-                reinterpret_cast<half *>(input_matrix.data<torch::Half>()),
-                reinterpret_cast<int *>(output_matrix.data<int>())
+                reinterpret_cast<half *>(input_matrix.data_ptr<torch::Half>()),
+                reinterpret_cast<int *>(output_matrix.data_ptr<int>())
             );
             break;
     }
@@ -196,15 +196,15 @@ torch::Tensor batched_quantization_cuda(
         case 8:
             batched_quantizationKernel_8b<8><<<grid_dim, block_dim>>>(
                 m, n, input_stride, output_stride, scale,
-                reinterpret_cast<half *>(input_matrix.data<torch::Half>()),
-                reinterpret_cast<int *>(output_matrix.data<int>())
+                reinterpret_cast<half *>(input_matrix.data_ptr<torch::Half>()),
+                reinterpret_cast<int *>(output_matrix.data_ptr<int>())
             );
             break;
         case 4:
             batched_quantizationKernel_4b<4><<<grid_dim, block_dim>>>(
                 m, n, input_stride, output_stride, scale,
-                reinterpret_cast<half *>(input_matrix.data<torch::Half>()),
-                reinterpret_cast<int *>(output_matrix.data<int>())
+                reinterpret_cast<half *>(input_matrix.data_ptr<torch::Half>()),
+                reinterpret_cast<int *>(output_matrix.data_ptr<int>())
             );
             break;
     }

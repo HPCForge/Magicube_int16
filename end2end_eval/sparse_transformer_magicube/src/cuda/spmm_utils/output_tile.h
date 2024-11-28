@@ -128,6 +128,52 @@
         }
     };
 
+    // 4 warps Tile_N = 128 16-bit v=2 4
+    struct wmmaOutputTile_16b{
+        //
+        // Member variables
+        //
+        int lane_id_;
+        int valid_tsize_;
+        // The register file fragment with the results to store
+        int* output_fragment_;
+        int4* output_matrix_;
+        float scale_;
+
+        // Constructor
+        __device__ __forceinline__ wmmaOutputTile_16b(
+            int lane_id, int vec_length,
+            int m_index_vec, int column_offset,
+            int cols,
+            int* output_fragment,
+            half* output_matrix,
+            float scale)
+        {
+            output_fragment_ = output_fragment;
+            valid_tsize_ = 4 * vec_length; // =32/(8/vec_length);
+            const int output_offset = (m_index_vec * vec_length + (lane_id % 32) / 4) * cols + column_offset;
+            output_matrix_ = reinterpret_cast<int4 *>(output_matrix + output_offset);
+            lane_id_ = lane_id;
+            scale_ = scale;
+        }
+
+        // Store
+        __device__ __forceinline__ void Store(){
+            half deq_results[8];
+
+            if(lane_id_ % 32 < valid_tsize_){
+                for(int i = 0; i < 8; i++){
+                    deq_results[i] = __float2half((float)(output_fragment_[i]) / scale_);
+                }
+            }
+
+            int output_off = (lane_id_ % 4) + (lane_id_ / 32) * 4;
+            if(lane_id_ % 32 < valid_tsize_){
+                *(output_matrix_ + output_off) = *(reinterpret_cast<int4 *>(deq_results));
+            }
+        }
+    };
+
     // 4 warps Tile_N = 128 16-bit 8-bit v=2 4
     struct wmmaOutputTile_16b8b{
         //
